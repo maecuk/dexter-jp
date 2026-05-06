@@ -52,24 +52,30 @@ async function jquantsGet(
 }
 
 /**
- * Resolve ticker to J-Quants code format (5 digits, e.g. "72030").
- * J-Quants uses 5-digit codes; EDINET/TSE uses 4-digit.
+ * Resolve ticker to J-Quants code format (5 chars + market suffix, e.g. "72030", "285A0").
+ * J-Quants uses a 5-character code. TSE securities codes may be 4 digits or newer
+ * alphanumeric codes such as "186A" and "285A"; append "0" for the standard market.
  */
 async function resolveJQuantsCode(ticker: string): Promise<string> {
-  // If already 5 digits, use as-is
-  if (/^\d{5}$/.test(ticker)) return ticker;
+  const key = ticker.trim().toUpperCase();
 
-  // If 4 digits, append "0" (standard J-Quants format)
-  if (/^\d{4}$/.test(ticker)) return ticker + '0';
+  // If already J-Quants format, use as-is.
+  if (/^[0-9A-Z]{5}$/.test(key)) return key;
+
+  // If TSE 4-character securities code, append "0" (standard J-Quants market suffix).
+  if (/^[0-9A-Z]{4}$/.test(key)) return key + '0';
 
   // Otherwise resolve through EDINET DB to get sec_code
-  const edinetCode = await resolveEdinetCode(ticker);
+  const edinetCode = await resolveEdinetCode(key);
   const { data: response } = await edinetApi.get(`/companies/${edinetCode}`, {});
   const company = (response.data || response) as Record<string, unknown>;
   const secCode = (company.sec_code || company.secCode) as string | undefined;
   if (!secCode) throw new Error(`No securities code found for ${ticker}`);
-  // sec_code from EDINET is 4 digits; J-Quants needs 5
-  return secCode.replace(/\D/g, '').slice(0, 4) + '0';
+
+  const normalized = secCode.trim().toUpperCase();
+  if (/^[0-9A-Z]{5}$/.test(normalized)) return normalized;
+  if (/^[0-9A-Z]{4}$/.test(normalized)) return normalized + '0';
+  throw new Error(`Invalid securities code for J-Quants: ${secCode}`);
 }
 
 // ============================================================================
@@ -104,7 +110,7 @@ const StockPriceInputSchema = z.object({
   ticker: z
     .string()
     .describe(
-      "Securities code (e.g. '7203' for Toyota), company name (e.g. 'トヨタ'), or EDINET code."
+      "Securities code (e.g. '7203' for Toyota, '285A' for alphanumeric TSE codes), company name (e.g. 'トヨタ'), or EDINET code."
     ),
   from: z
     .string()

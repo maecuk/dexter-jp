@@ -1,5 +1,5 @@
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { createGetFinancials, createReadFilings, createScreenCompanies, getStockPrice, isJQuantsAvailable, STOCK_PRICE_DESCRIPTION } from './finance/index.js';
+import { createGetFinancials, createReadFilings, createScreenCompanies, getStockPrice, isJQuantsAvailable, sepaCheapFilter, SEPA_CHEAP_FILTER_DESCRIPTION, STOCK_PRICE_DESCRIPTION } from './finance/index.js';
 import { exaSearch, perplexitySearch, tavilySearch, WEB_SEARCH_DESCRIPTION, xSearchTool, X_SEARCH_DESCRIPTION } from './search/index.js';
 import { skillTool, SKILL_TOOL_DESCRIPTION } from './skill.js';
 import { webFetchTool, WEB_FETCH_DESCRIPTION } from './fetch/web-fetch.js';
@@ -47,7 +47,7 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: createGetFinancials(model),
       description: GET_FINANCIALS_DESCRIPTION,
       compactDescription: 'Japanese company financials, metrics, earnings, and AI analysis. Handles multi-company/multi-metric queries in one call.',
-      concurrencySafe: true,
+      concurrencySafe: false,
     },
     {
       name: 'read_filings',
@@ -61,7 +61,7 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: createScreenCompanies(model),
       description: SCREEN_COMPANIES_DESCRIPTION,
       compactDescription: 'Screen Japanese listed companies by financial criteria (PER, ROE, growth, margins, etc.).',
-      concurrencySafe: true,
+      concurrencySafe: false,
     },
     {
       name: 'web_fetch',
@@ -143,13 +143,22 @@ export function getToolRegistry(model: string): RegisteredTool[] {
 
   // Include stock price tool if J-Quants refresh token is configured
   if (isJQuantsAvailable()) {
-    tools.push({
-      name: 'get_stock_price',
-      tool: getStockPrice,
-      description: STOCK_PRICE_DESCRIPTION,
-      compactDescription: 'Japanese stock price OHLC and volume from J-Quants (TSE official data).',
-      concurrencySafe: true,
-    });
+    tools.push(
+      {
+        name: 'get_stock_price',
+        tool: getStockPrice,
+        description: STOCK_PRICE_DESCRIPTION,
+        compactDescription: 'Japanese stock price OHLC and volume from J-Quants (TSE official data).',
+        concurrencySafe: true,
+      },
+      {
+        name: 'sepa_cheap_filter',
+        tool: sepaCheapFilter,
+        description: SEPA_CHEAP_FILTER_DESCRIPTION,
+        compactDescription: 'SEPA cheap filter using J-Quants OHLCV: liquidity, approximate RS, SMA trend template, Stage 2, VCP hints.',
+        concurrencySafe: true,
+      },
+    );
   }
 
   // Include web_search if Exa, Perplexity, or Tavily API key is configured (Exa → Perplexity → Tavily)

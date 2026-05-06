@@ -22,11 +22,9 @@ const ERROR_PATTERNS = {
     /rate[_ ]limit|too many requests|429/i,
     'model_cooldown',
     'cooling down',
-    'exceeded your current quota',
     'resource has been exhausted',
     'quota exceeded',
     'resource_exhausted',
-    'usage limit',
     'tpm',
     'tokens per minute',
   ],
@@ -49,6 +47,8 @@ const ERROR_PATTERNS = {
     'insufficient credits',
     'credit balance',
     'insufficient balance',
+    'exceeded your current quota',
+    'usage limit',
   ],
   auth: [
     /invalid[_ ]?api[_ ]?key/i,
@@ -219,7 +219,7 @@ export function classifyError(raw?: string): ErrorType {
 
 export function isNonRetryableError(raw?: string): boolean {
   const type = classifyError(raw);
-  return type === 'context_overflow' || type === 'billing' || type === 'auth' || type === 'rate_limit';
+  return type === 'context_overflow' || type === 'billing' || type === 'auth';
 }
 
 export function formatUserFacingError(raw: string, provider?: string): string {

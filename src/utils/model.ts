@@ -14,6 +14,7 @@ interface Provider {
 const PROVIDER_MODELS: Record<string, Model[]> = {
   openai: [
     { id: 'gpt-5.4', displayName: 'GPT 5.4' },
+    { id: 'gpt-5.4-mini', displayName: 'GPT 5.4 Mini' },
     { id: 'gpt-4.1', displayName: 'GPT 4.1' },
   ],
   anthropic: [

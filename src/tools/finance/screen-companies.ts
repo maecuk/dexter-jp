@@ -24,6 +24,7 @@ Screens for Japanese listed companies matching financial criteria. Takes a natur
 
 - Looking up a specific company's financials (use get_financials)
 - Reading securities reports (use read_filings)
+- SEPA / technical screening by price, volume, SMA, RS, Stage 2, 52-week position, VCP, or pivot candidates (use sepa_cheap_filter if available)
 - General web searches (use web_search)
 
 ## Usage Notes
@@ -77,12 +78,116 @@ const ScreenerConditionSchema = z.object({
     operator: z.enum(['gte', 'lte', 'gt', 'lt', 'eq']).describe('Comparison operator'),
     value: z.number().describe('Threshold value in display units'),
   })).describe('Array of screening conditions to apply (AND logic)'),
-  industry: z.string().optional().describe('Filter by industry (Japanese name, exact match)'),
-  limit: z.number().optional().describe('Maximum number of results (default: 25, max: 200)'),
-  sort_by: z.string().optional().describe('Sort results by this metric key'),
+  industry: z.string().nullable().describe('Filter by industry (Japanese name, exact match), or null for no industry filter'),
+  limit: z.number().nullable().describe('Maximum number of results (default: 25, max: 200), or null for default'),
+  sort_by: z.string().nullable().describe('Sort results by this metric key, or null for default sort'),
 });
 
 type ScreenerConditions = z.infer<typeof ScreenerConditionSchema>;
+
+const INDUSTRIES = [
+  '情報・通信業',
+  '卸売業',
+  '電気機器',
+  '輸送用機器',
+  '医薬品',
+  '銀行業',
+  '小売業',
+  'サービス業',
+  '化学',
+  '機械',
+  '建設業',
+  '不動産業',
+  '食料品',
+  '鉄鋼',
+  '証券・商品先物取引業',
+  '保険業',
+  '非鉄金属',
+  'ガラス・土石製品',
+] as const;
+
+function parseLimit(query: string): number | null {
+  const topMatch = query.match(/(?:上位|top)\s*(\d{1,3})/i);
+  if (topMatch) return Math.min(Number(topMatch[1]), 200);
+
+  const countMatch = query.match(/(\d{1,3})\s*(?:件|銘柄)/);
+  if (countMatch) return Math.min(Number(countMatch[1]), 200);
+
+  return null;
+}
+
+function parseIndustry(query: string): string | null {
+  const mentioned = INDUSTRIES.filter((industry) => query.includes(industry));
+  if (mentioned.length === 1) return mentioned[0];
+
+  const explicit = query.match(/(?:業種|industry)\s*[:：]\s*([^\s,、。]+)/i);
+  if (explicit) {
+    const value = explicit[1].trim();
+    return INDUSTRIES.find((industry) => industry === value) ?? null;
+  }
+
+  return null;
+}
+
+function parseNumericCondition(
+  query: string,
+  labels: string[],
+  metric: string,
+): ScreenerConditions['conditions'][number] | null {
+  const escapedLabels = labels.map((label) => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const pattern = new RegExp(`(?:${escapedLabels.join('|')})\\s*(\\d+(?:\\.\\d+)?)\\s*(以上|以下|超|未満|>|<|>=|<=)?`);
+  const match = query.match(pattern);
+  if (!match) return null;
+
+  const value = Number(match[1]);
+  const opText = match[2] ?? '以上';
+  const operator = opText === '以下' || opText === '未満' || opText === '<' || opText === '<='
+    ? opText === '未満' || opText === '<' ? 'lt' : 'lte'
+    : opText === '超' || opText === '>' ? 'gt' : 'gte';
+
+  return { metric, operator, value };
+}
+
+function buildHeuristicConditions(query: string): ScreenerConditions {
+  const conditions = [
+    parseNumericCondition(query, ['ROE', 'roe'], 'roe'),
+    parseNumericCondition(query, ['ROIC', 'roic'], 'roic'),
+    parseNumericCondition(query, ['自己資本比率', 'equity ratio'], 'equity-ratio'),
+    parseNumericCondition(query, ['PER', 'per'], 'per'),
+    parseNumericCondition(query, ['PBR', 'pbr'], 'pbr'),
+    parseNumericCondition(query, ['営業利益率', 'operating margin'], 'operating-margin'),
+    parseNumericCondition(query, ['売上成長率', 'revenue growth'], 'revenue-growth'),
+  ].filter((condition): condition is ScreenerConditions['conditions'][number] => condition !== null);
+
+  const lower = query.toLowerCase();
+  const isStageOne = query.includes('Stage 1') || query.includes('Stage1') || query.includes('一次') || query.includes('軽量');
+  const isMultibagger = lower.includes('multibagger') || query.includes('マルチバガー');
+
+  if (conditions.length === 0) {
+    if (isStageOne || isMultibagger) {
+      conditions.push(
+        { metric: 'revenue-growth', operator: 'gte', value: 0 },
+        { metric: 'equity-ratio', operator: 'gte', value: 30 },
+        { metric: 'health-score', operator: 'gte', value: 40 },
+      );
+    } else if (query.includes('割安')) {
+      conditions.push({ metric: 'per', operator: 'lte', value: 15 });
+    } else if (query.includes('高ROE')) {
+      conditions.push({ metric: 'roe', operator: 'gte', value: 15 });
+    } else if (query.includes('高配当')) {
+      conditions.push({ metric: 'dividend-yield', operator: 'gte', value: 3 });
+    } else {
+      conditions.push({ metric: 'health-score', operator: 'gte', value: 0 });
+    }
+  }
+
+  return {
+    conditions,
+    industry: parseIndustry(query),
+    limit: parseLimit(query),
+    sort_by: isStageOne || isMultibagger ? 'revenue-growth' : null,
+  };
+}
 
 function buildScreenerPrompt(): string {
   return `You are a Japanese stock screening assistant.
@@ -127,7 +232,8 @@ export function createScreenCompanies(model: string): DynamicStructuredTool {
 - Screening by profitability (margins, ROE, ROA, ROIC)
 - Filtering by growth rates (revenue, earnings, EPS growth)
 - Dividend screening (yield, payout ratio)
-- Filtering by industry (e.g., "情報・通信業", "医薬品")`,
+- Filtering by industry (e.g., "情報・通信業", "医薬品")
+Do not use for SEPA, RS, SMA, price/volume, Stage 2, VCP, pivot, or chart-pattern screening; use sepa_cheap_filter instead when available.`,
     schema: ScreenCompaniesInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
@@ -143,13 +249,8 @@ export function createScreenCompanies(model: string): DynamicStructuredTool {
         });
         conditions = ScreenerConditionSchema.parse(response);
       } catch (error) {
-        return formatToolResult(
-          {
-            error: 'Failed to parse screening criteria',
-            details: error instanceof Error ? error.message : String(error),
-          },
-          [],
-        );
+        onProgress?.('Using heuristic screening criteria...');
+        conditions = buildHeuristicConditions(input.query);
       }
 
       // GET /screener with conditions as JSON query param
